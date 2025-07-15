@@ -1,0 +1,77 @@
+# .github/workflows/debug-tag-creation.yml
+# Temporary workflow to debug tag creation issues
+
+name: Debug Tag Creation
+
+on:
+  create:
+    tags:
+      - '*'
+
+jobs:
+  debug-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Debug tag creation
+        run: |
+          echo "🐛 DEBUG: Tag Creation Event"
+          echo "=========================="
+          echo "Event: ${{ github.event_name }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Tag: ${{ github.ref_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Ref Type: ${{ github.ref_type }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Workflow: ${{ github.workflow }}"
+          echo ""
+          
+          echo "🔍 Git Information:"
+          echo "Current branch: $(git branch --show-current 2>/dev/null || echo 'detached')"
+          echo "Tag exists locally: $(git tag -l ${{ github.ref_name }} || echo 'no')"
+          echo "Tag exists remotely: $(gh api repos/${{ github.repository }}/git/refs/tags/${{ github.ref_name }} --jq '.ref' 2>/dev/null || echo 'no')"
+          
+          echo ""
+          echo "📝 Tag Details:"
+          TAG_COMMIT=$(git rev-list -n 1 ${{ github.ref_name }} 2>/dev/null || echo "unknown")
+          echo "Tag commit: $TAG_COMMIT"
+          
+          if [[ "$TAG_COMMIT" != "unknown" ]]; then
+            echo "Commit message:"
+            git log -1 --pretty=%B $TAG_COMMIT 2>/dev/null || echo "Could not get message"
+            echo ""
+            echo "Commit author: $(git log -1 --pretty=%an $TAG_COMMIT 2>/dev/null || echo 'unknown')"
+            echo "Commit date: $(git log -1 --pretty=%ad $TAG_COMMIT 2>/dev/null || echo 'unknown')"
+          fi
+          
+          echo ""
+          echo "🏷️ Tag Annotation:"
+          git tag -l --format='%(contents)' ${{ github.ref_name }} 2>/dev/null || echo "No annotation or error reading"
+          
+          echo ""
+          echo "🔍 Recent Commits (last 5):"
+          git log --oneline -5 2>/dev/null || echo "Could not get recent commits"
+          
+          echo ""
+          echo "🤖 Automation Check:"
+          AUTOMATION_COMMITS=$(git log --oneline -10 --grep="\[automated-release\]" 2>/dev/null || echo "")
+          if [[ -n "$AUTOMATION_COMMITS" ]]; then
+            echo "Found automation commits:"
+            echo "$AUTOMATION_COMMITS"
+          else
+            echo "No automation commits found in last 10 commits"
+          fi
+          
+          echo ""
+          echo "📊 All Tags:"
+          git tag -l | head -20 || echo "No tags or error listing"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
