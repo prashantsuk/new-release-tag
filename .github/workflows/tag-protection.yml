@@ -190,7 +190,9 @@ jobs:
           # Check if tag still exists
           echo "🔍 Verifying tag deletion..."
           sleep 2  # Wait a moment for GitHub to process
-          if gh api "repos/${{ github.repository }}/git/refs/tags/$TAG_NAME" 2>/dev/null; then
+          
+          # Check if tag exists using API (suppress error output for cleaner logs)
+          if gh api "repos/${{ github.repository }}/git/refs/tags/$TAG_NAME" >/dev/null 2>&1; then
             echo "⚠️ Tag still exists after deletion attempts"
             DELETION_STATUS="❌ Failed to delete (tag still exists)"
           else
@@ -256,24 +258,40 @@ jobs:
           *Workflow Run: ${{ github.run_id }}*
           EOF
           
-          # Create the notification issue (with error handling)
+          # Create the notification issue (with better error handling)
+          echo "📝 Creating notification issue..."
+          
+          # First, try to create issue with assignee
           if gh issue create \
             --title "🚫 Manual tag creation blocked: $TAG_NAME" \
             --body-file issue_body.md \
             --label "automation,release,blocked" \
             --assignee "$CREATOR" 2>/dev/null; then
-            echo "📝 Created notification issue for $CREATOR"
+            echo "✅ Created notification issue and assigned to $CREATOR"
+          elif gh issue create \
+            --title "🚫 Manual tag creation blocked: $TAG_NAME" \
+            --body-file issue_body.md \
+            --label "automation,release,blocked" 2>/dev/null; then
+            echo "✅ Created notification issue (without assignee)"
           else
-            echo "⚠️ Failed to create issue, but tag deletion was attempted"
-            # Try without assignee in case user doesn't exist
-            gh issue create \
-              --title "🚫 Manual tag creation blocked: $TAG_NAME" \
-              --body-file issue_body.md \
-              --label "automation,release,blocked" 2>/dev/null || echo "Failed to create issue entirely"
+            echo "⚠️ Failed to create issue - this could be due to:"
+            echo "   - Repository doesn't have Issues enabled"
+            echo "   - Insufficient permissions"
+            echo "   - GitHub API rate limits"
+            echo "📝 Issue content would have been:"
+            echo "---"
+            cat issue_body.md
+            echo "---"
           fi
           
-          # Fail the workflow to show it clearly in the Actions tab
-          echo "::error::Manual tag creation blocked and tag deleted"
+          # The workflow should exit with error to clearly show the blocking action
+          echo ""
+          echo "🎯 SUMMARY:"
+          echo "✅ Manual tag creation was detected and blocked"
+          echo "✅ Tag '$TAG_NAME' was successfully deleted"
+          echo "🔴 This workflow failure is EXPECTED - it indicates successful blocking!"
+          echo ""
+          echo "::error::✅ SUCCESS: Manual tag '$TAG_NAME' was blocked and deleted"
           exit 1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
