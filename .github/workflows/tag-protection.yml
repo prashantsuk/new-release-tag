@@ -27,7 +27,8 @@ jobs:
       - name: Validate tag creation source
         id: validate
         run: |
-          echo "🔍 Checking tag creation context..."
+          echo "🔍 DETAILED DEBUGGING OF TAG VALIDATION"
+          echo "========================================"
           echo "Event: ${{ github.event_name }}"
           echo "Actor: ${{ github.actor }}"
           echo "Tag: ${{ github.ref_name }}"
@@ -45,7 +46,7 @@ jobs:
           # Get the commit message for the tagged commit
           if [[ "$TAG_COMMIT" != "unknown" ]]; then
             COMMIT_MSG=$(git log -1 --pretty=%B $TAG_COMMIT 2>/dev/null || echo "")
-            echo "Commit message: $COMMIT_MSG"
+            echo "Commit message: '$COMMIT_MSG'"
           else
             COMMIT_MSG=""
             echo "Could not retrieve commit message"
@@ -53,31 +54,42 @@ jobs:
           
           # Get tag annotation message if it exists
           TAG_MESSAGE=$(git tag -l --format='%(contents)' ${{ github.ref_name }} 2>/dev/null || echo "")
-          echo "Tag annotation: $TAG_MESSAGE"
+          echo "Tag annotation: '$TAG_MESSAGE'"
           
           # STRICT VALIDATION: Default to BLOCK unless we find EXPLICIT automation markers
-          echo "🔒 STRICT MODE: Tag will be blocked unless explicit automation markers are found"
+          echo ""
+          echo "🔒 STARTING STRICT VALIDATION"
+          echo "🔒 Default: BLOCK (unless explicit automation proof found)"
+          echo ""
           
           # Method 1: Check if tag annotation contains our EXACT automation marker
-          if [[ "$TAG_MESSAGE" =~ \[automated-release\] ]]; then
+          echo "METHOD 1: Checking tag annotation for [automated-release]"
+          if [[ -n "$TAG_MESSAGE" && "$TAG_MESSAGE" =~ \[automated-release\] ]]; then
             echo "✅ FOUND: Tag annotation contains [automated-release] marker"
+            echo "✅ ALLOWING tag due to annotation marker"
             echo "allowed=true" >> $GITHUB_OUTPUT
             exit 0
           else
             echo "❌ NOT FOUND: Tag annotation does not contain [automated-release] marker"
+            echo "   Tag annotation content: '$TAG_MESSAGE'"
           fi
           
           # Method 2: Check if commit message contains our EXACT automation marker
-          if [[ "$COMMIT_MSG" =~ \[automated-release\] ]]; then
+          echo ""
+          echo "METHOD 2: Checking commit message for [automated-release]"
+          if [[ -n "$COMMIT_MSG" && "$COMMIT_MSG" =~ \[automated-release\] ]]; then
             echo "✅ FOUND: Commit message contains [automated-release] marker"
+            echo "✅ ALLOWING tag due to commit message marker"
             echo "allowed=true" >> $GITHUB_OUTPUT
             exit 0
           else
             echo "❌ NOT FOUND: Commit message does not contain [automated-release] marker"
+            echo "   Commit message content: '$COMMIT_MSG'"
           fi
           
           # Method 3: Check if recent commits (last 5 minutes) contain automation marker AND tag points to one of them
-          echo "🔍 Checking for recent automation activity..."
+          echo ""
+          echo "METHOD 3: Checking for recent automation activity (last 5 minutes)"
           RECENT_AUTOMATION=$(git log --since="5 minutes ago" --oneline --grep="\[automated-release\]" 2>/dev/null || echo "")
           if [[ -n "$RECENT_AUTOMATION" ]]; then
             echo "✅ FOUND: Recent automation commits in last 5 minutes:"
@@ -85,27 +97,32 @@ jobs:
             
             # Check if the tag points to one of these automation commits
             if echo "$RECENT_AUTOMATION" | grep -q "$TAG_COMMIT"; then
-              echo "✅ MATCH: Tag points to recent automation commit - allowing"
+              echo "✅ MATCH: Tag points to recent automation commit - ALLOWING"
               echo "allowed=true" >> $GITHUB_OUTPUT
               exit 0
             else
               echo "❌ NO MATCH: Tag does not point to recent automation commit"
+              echo "   Tag commit: $TAG_COMMIT"
+              echo "   Recent automation commits: $RECENT_AUTOMATION"
             fi
           else
             echo "❌ NOT FOUND: No recent automation activity in last 5 minutes"
           fi
           
           # Method 4: Check if this is triggered by workflow_run (from another workflow)
+          echo ""
+          echo "METHOD 4: Checking if triggered by workflow_run"
           if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            echo "✅ FOUND: Triggered by workflow_run event - allowing"
+            echo "✅ FOUND: Triggered by workflow_run event - ALLOWING"
             echo "allowed=true" >> $GITHUB_OUTPUT
             exit 0
           else
-            echo "❌ NOT FOUND: Not triggered by workflow_run"
+            echo "❌ NOT FOUND: Not triggered by workflow_run (event: ${{ github.event_name }})"
           fi
           
           # Method 5: Check for automation in last 10 commits AND verify tag points to one of them
-          echo "🔍 Checking last 10 commits for automation markers..."
+          echo ""
+          echo "METHOD 5: Checking last 10 commits for automation markers"
           RECENT_AUTOMATION_EXTENDED=$(git log --oneline -10 --grep="\[automated-release\]" 2>/dev/null || echo "")
           if [[ -n "$RECENT_AUTOMATION_EXTENDED" ]]; then
             echo "✅ FOUND: Automation commits in last 10:"
@@ -113,11 +130,15 @@ jobs:
             
             # Check if the tag points to one of these automation commits
             if echo "$RECENT_AUTOMATION_EXTENDED" | grep -q "$TAG_COMMIT"; then
-              echo "✅ MATCH: Tag points to automation commit - allowing"
+              echo "✅ MATCH: Tag points to automation commit - ALLOWING"
+              echo "   Tag commit: $TAG_COMMIT"
+              echo "   Matching automation commit found"
               echo "allowed=true" >> $GITHUB_OUTPUT
               exit 0
             else
               echo "❌ NO MATCH: Tag does not point to any automation commit"
+              echo "   Tag commit: $TAG_COMMIT"
+              echo "   None of the automation commits match"
             fi
           else
             echo "❌ NOT FOUND: No automation commits in last 10"
@@ -125,15 +146,17 @@ jobs:
           
           # If we reach here, NO automation markers were found - this is MANUAL
           echo ""
-          echo "🚨 BLOCKING DECISION:"
-          echo "❌ NO automation markers found anywhere!"
-          echo "❌ Tag '${{ github.ref_name }}' is MANUAL"
+          echo "🚨 FINAL DECISION: BLOCKING!"
+          echo "=========================================="
+          echo "❌ NO automation evidence found anywhere!"
+          echo "❌ Tag '${{ github.ref_name }}' is DEFINITELY MANUAL"
           echo "❌ Actor: ${{ github.actor }}"
           echo "❌ Tag annotation: '$TAG_MESSAGE'"
           echo "❌ Commit message: '$COMMIT_MSG'"
           echo "❌ No [automated-release] markers in recent commits"
+          echo "❌ Not triggered by workflow_run"
           echo ""
-          echo "🗑️ This tag will be DELETED!"
+          echo "🗑️ This tag WILL BE DELETED!"
           echo "allowed=false" >> $GITHUB_OUTPUT
 
       - name: Delete manual tag and create notification
