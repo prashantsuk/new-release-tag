@@ -34,75 +34,97 @@ jobs:
           echo "Workflow: ${{ github.workflow }}"
           echo "Repository: ${{ github.repository }}"
           echo "Run ID: ${{ github.run_id }}"
+          echo "Event Name: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Ref Type: ${{ github.ref_type }}"
           
           # Get the commit that created this tag
-          TAG_COMMIT=$(git rev-list -n 1 ${{ github.ref_name }})
+          TAG_COMMIT=$(git rev-list -n 1 ${{ github.ref_name }} 2>/dev/null || echo "unknown")
           echo "Tag points to commit: $TAG_COMMIT"
           
           # Get the commit message for the tagged commit
-          COMMIT_MSG=$(git log -1 --pretty=%B $TAG_COMMIT)
-          echo "Commit message: $COMMIT_MSG"
+          if [[ "$TAG_COMMIT" != "unknown" ]]; then
+            COMMIT_MSG=$(git log -1 --pretty=%B $TAG_COMMIT 2>/dev/null || echo "")
+            echo "Commit message: $COMMIT_MSG"
+          else
+            COMMIT_MSG=""
+            echo "Could not retrieve commit message"
+          fi
           
-          # Method 1: Check if actor is a bot or automation account (MOST RELIABLE)
-          if [[ "${{ github.actor }}" == "github-actions[bot]" ]] || 
-             [[ "${{ github.actor }}" == "dependabot[bot]" ]] ||
-             [[ "${{ github.actor }}" == *"[bot]" ]] ||
-             [[ "${{ github.actor }}" == "automation" ]] ||
-             [[ "${{ github.actor }}" == "release-bot" ]]; then
-            echo "✅ Tag created by bot/automation account: ${{ github.actor }}"
+          # Get tag annotation message if it exists
+          TAG_MESSAGE=$(git tag -l --format='%(contents)' ${{ github.ref_name }} 2>/dev/null || echo "")
+          echo "Tag annotation: $TAG_MESSAGE"
+          
+          # The key logic: Check if tag was created by our Automated Release workflow
+          # Method 1: Check if tag annotation contains our automation marker
+          if [[ "$TAG_MESSAGE" =~ \[automated-release\] ]]; then
+            echo "✅ Tag annotation contains automation marker - allowing"
             echo "allowed=true" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          # Method 2: Check for automation markers in commit message
-          if [[ "$COMMIT_MSG" =~ \[automated-release\] ]]; then
-            echo "✅ Tag created by automated process (commit marker found)"
-            echo "allowed=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Method 3: Check if this workflow is running as part of another workflow
-          # This happens when the Automated Release workflow creates a tag
-          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            echo "✅ Tag created by workflow_run event"
-            echo "allowed=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Method 4: Check for automation environment variable
-          if [[ "${{ vars.AUTOMATED_RELEASE }}" == "true" ]]; then
-            echo "✅ Tag created with automation flag"
-            echo "allowed=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Method 5: Check if there's a recent commit with automation marker (within last 5 commits)
+          # Method 2: Check if recent commits contain automation marker
           echo "🔍 Checking recent commits for automation markers..."
-          RECENT_AUTOMATION=$(git log --oneline -5 --grep="\[automated-release\]" || echo "")
+          RECENT_AUTOMATION=$(git log --oneline -10 --grep="\[automated-release\]" 2>/dev/null || echo "")
           if [[ -n "$RECENT_AUTOMATION" ]]; then
             echo "✅ Found recent automation commit: $RECENT_AUTOMATION"
+            
+            # Check if the tag points to one of these automation commits
+            if echo "$RECENT_AUTOMATION" | grep -q "$TAG_COMMIT"; then
+              echo "✅ Tag points to automation commit - allowing"
+              echo "allowed=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          
+          # Method 3: Check if commit message contains automation marker
+          if [[ "$COMMIT_MSG" =~ \[automated-release\] ]]; then
+            echo "✅ Commit message contains automation marker - allowing"
             echo "allowed=true" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          # Method 6: Check if tag was created during a workflow run by checking timing
-          # If this tag creation happens within 60 seconds of a workflow run, it's likely automated
-          CURRENT_TIME=$(date +%s)
-          echo "Current time: $CURRENT_TIME"
-          
-          # Method 7: Check the tag annotation message for automation markers
-          TAG_MESSAGE=$(git tag -l --format='%(contents)' ${{ github.ref_name }} || echo "")
-          echo "Tag message: $TAG_MESSAGE"
-          if [[ "$TAG_MESSAGE" =~ \[automated-release\] ]]; then
-            echo "✅ Tag annotation contains automation marker"
+          # Method 4: Check if this is triggered by workflow_run (from another workflow)
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            echo "✅ Triggered by workflow_run - allowing"
             echo "allowed=true" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          # If none of the above conditions are met, it's manual creation
-          echo "❌ Manual tag creation detected!"
-          echo "❌ Tag '${{ github.ref_name }}' was created manually by ${{ github.actor }}"
-          echo "❌ This is not allowed - the tag will be deleted"
+          # Method 5: Check timing - if a recent commit (last 5 minutes) has automation marker
+          echo "🔍 Checking for recent automation activity..."
+          FIVE_MINUTES_AGO=$(date -d '5 minutes ago' +%s 2>/dev/null || date -v-5M +%s 2>/dev/null || echo "0")
+          RECENT_COMMITS=$(git log --since="5 minutes ago" --oneline --grep="\[automated-release\]" 2>/dev/null || echo "")
+          if [[ -n "$RECENT_COMMITS" ]]; then
+            echo "✅ Found recent automation activity (last 5 minutes) - allowing"
+            echo "Recent automation commits: $RECENT_COMMITS"
+            echo "allowed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Method 6: Special case - if actor is github-actions[bot] but verify it's really automated
+          if [[ "${{ github.actor }}" == "github-actions[bot]" ]]; then
+            echo "⚠️ Actor is github-actions[bot] - need to verify if truly automated"
+            
+            # Check if there are any automation markers in recent history
+            if [[ -n "$RECENT_AUTOMATION" ]] || [[ "$TAG_MESSAGE" =~ (automated|release|bot) ]] || [[ "$COMMIT_MSG" =~ (automated|release|bot) ]]; then
+              echo "✅ Bot actor with automation evidence - allowing"
+              echo "allowed=true" >> $GITHUB_OUTPUT
+              exit 0
+            else
+              echo "❌ Bot actor but no automation evidence - treating as manual"
+            fi
+          fi
+          
+          # If we reach here, it's likely a manual tag creation
+          echo "❌ MANUAL TAG CREATION DETECTED!"
+          echo "❌ Tag '${{ github.ref_name }}' appears to be created manually"
+          echo "❌ Actor: ${{ github.actor }}"
+          echo "❌ No automation markers found in:"
+          echo "   - Tag annotation"
+          echo "   - Commit messages"
+          echo "   - Recent automation activity"
+          echo "❌ This tag will be deleted!"
           echo "allowed=false" >> $GITHUB_OUTPUT
 
       - name: Delete manual tag and create notification
@@ -129,18 +151,51 @@ jobs:
           
           # Delete the manually created tag
           echo "🗑️ Attempting to delete manual tag: $TAG_NAME"
+          echo "🔍 Current git state before deletion:"
+          git tag -l | grep "$TAG_NAME" || echo "Tag not found locally"
           
-          # Try multiple methods to delete the tag
-          if git push origin :refs/tags/$TAG_NAME; then
-            echo "✅ Successfully deleted tag $TAG_NAME from remote"
+          # Method 1: Delete using git push
+          echo "Method 1: Deleting via git push..."
+          if git push origin :refs/tags/$TAG_NAME 2>&1; then
+            echo "✅ Successfully deleted tag $TAG_NAME from remote using git push"
+            DELETION_SUCCESS=true
           else
-            echo "❌ Failed to delete tag from remote, trying alternative method..."
-            # Alternative method using GitHub CLI
-            if gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG_NAME"; then
+            echo "❌ Failed to delete tag using git push"
+            DELETION_SUCCESS=false
+          fi
+          
+          # Method 2: Delete using GitHub API if git push failed
+          if [[ "$DELETION_SUCCESS" != "true" ]]; then
+            echo "Method 2: Deleting via GitHub API..."
+            if gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG_NAME" 2>&1; then
               echo "✅ Successfully deleted tag $TAG_NAME using GitHub API"
+              DELETION_SUCCESS=true
             else
-              echo "❌ Failed to delete tag using API as well"
+              echo "❌ Failed to delete tag using GitHub API"
             fi
+          fi
+          
+          # Method 3: Force delete with alternative API endpoint
+          if [[ "$DELETION_SUCCESS" != "true" ]]; then
+            echo "Method 3: Force delete via alternative API..."
+            TAG_SHA=$(gh api "repos/${{ github.repository }}/git/refs/tags/$TAG_NAME" --jq '.object.sha' 2>/dev/null || echo "")
+            if [[ -n "$TAG_SHA" ]]; then
+              if gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG_NAME" -f sha="$TAG_SHA" 2>&1; then
+                echo "✅ Successfully force deleted tag $TAG_NAME"
+                DELETION_SUCCESS=true
+              fi
+            fi
+          fi
+          
+          # Check if tag still exists
+          echo "🔍 Verifying tag deletion..."
+          sleep 2  # Wait a moment for GitHub to process
+          if gh api "repos/${{ github.repository }}/git/refs/tags/$TAG_NAME" 2>/dev/null; then
+            echo "⚠️ Tag still exists after deletion attempts"
+            DELETION_STATUS="❌ Failed to delete (tag still exists)"
+          else
+            echo "✅ Tag successfully deleted and no longer exists"
+            DELETION_STATUS="✅ Successfully deleted"
           fi
           
           # Create an issue to notify about the blocked attempt
@@ -151,22 +206,30 @@ jobs:
           **Created by:** @$CREATOR  
           **Time:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")  
           **Event:** ${{ github.event_name }}  
-          **Workflow Run:** [${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          **Workflow Run:** [${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})  
+          **Deletion Status:** $DELETION_STATUS
           
           ### ❌ What happened?
-          The tag \`$TAG_NAME\` was automatically deleted because it was created manually.
+          The tag \`$TAG_NAME\` was created manually and our automation detected it.
+          **Action taken:** Attempted automatic deletion.
+          
+          ### 🔍 Detection Details
+          - **Actor:** ${{ github.actor }}
+          - **Event:** ${{ github.event_name }}
+          - **Tag Commit:** $TAG_COMMIT
+          - **No automation markers found in tag or recent commits**
           
           ### ✅ How to create releases properly?
           
           **Option 1: Use the Automated Release Workflow**
           1. Go to **[Actions → Automated Release](https://github.com/${{ github.repository }}/actions/workflows/automated-release.yml)**
           2. Click **"Run workflow"**
-          3. Enter the version number (e.g., \`1.0.0\`)
+          3. Enter the version number (e.g., \`1.0.3\`)
           4. Click **"Run workflow"**
           
           **Option 2: Update VERSION file and merge PR**
           1. Create a feature branch
-          2. Update the \`VERSION\` file with your desired version
+          2. Update the \`VERSION\` file with your desired version (e.g., \`1.0.3\`)
           3. Create and merge a PR to main/master
           4. Release will be created automatically
           
@@ -177,6 +240,12 @@ jobs:
           - ✅ Prevents accidental or malformed releases
           - ✅ Tracks release triggers and contexts
           
+          ### 🚨 If this was a legitimate automated release
+          If you believe this tag was created by automation but was incorrectly flagged:
+          1. Check that your automation includes the \`[automated-release]\` marker
+          2. Verify the tag annotation contains automation markers
+          3. Contact the DevOps team for investigation
+          
           ### 📋 Need help?
           - Check the repository's release documentation
           - Contact the DevOps team
@@ -184,6 +253,7 @@ jobs:
           
           ---
           *This issue was created automatically by the Tag Protection workflow.*
+          *Workflow Run: ${{ github.run_id }}*
           EOF
           
           # Create the notification issue (with error handling)
