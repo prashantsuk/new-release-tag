@@ -36,11 +36,6 @@ on:
     branches:
       - main
       - master
-    paths:
-      - 'package.json'
-      - 'version.txt'
-      - 'VERSION'
-      - 'pom.xml'
 
   # Also trigger on pull request merge to main/master
   pull_request:
@@ -57,10 +52,9 @@ jobs:
     runs-on: ubuntu-latest
     # Only run on main/master branch and for merged PRs
     if: |
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
-      (github.event_name == 'workflow_dispatch' || 
-       github.event_name == 'push' ||
-       (github.event_name == 'pull_request' && github.event.pull_request.merged == true))
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
     permissions:
       contents: write
       issues: write
@@ -87,22 +81,15 @@ jobs:
             echo "trigger_type=manual" >> $GITHUB_OUTPUT
             echo "should_release=true" >> $GITHUB_OUTPUT
           elif [[ "${{ github.event_name }}" == "pull_request" && "${{ github.event.pull_request.merged }}" == "true" ]]; then
-            echo "✅ Pull request merged to ${{ github.base_ref }} - checking for release triggers"
+            echo "✅ Pull request merged to ${{ github.event.pull_request.base.ref }} - checking for release triggers"
             echo "trigger_type=pr_merged" >> $GITHUB_OUTPUT
             echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
             echo "pr_title=${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
             echo "source_branch=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
             
-            # Check if PR title contains release keywords
-            PR_TITLE="${{ github.event.pull_request.title }}"
-            if [[ "$PR_TITLE" =~ (release|Release|RELEASE|version|Version|v[0-9]) ]] || 
-               [[ "${{ github.event.pull_request.head.ref }}" =~ (release|hotfix|feature) ]]; then
-              echo "✅ PR contains release indicators - will check for version changes"
-              echo "should_release=check_version" >> $GITHUB_OUTPUT
-            else
-              echo "ℹ️ PR does not contain release indicators - skipping auto-release"
-              echo "should_release=false" >> $GITHUB_OUTPUT
-            fi
+            # Always allow release for merged PRs - we'll check version changes later
+            echo "✅ PR merged - will check for version changes or auto-increment"
+            echo "should_release=check_version" >> $GITHUB_OUTPUT
           elif [[ "${{ github.event_name }}" == "push" ]]; then
             echo "✅ Direct push to main/master with version file changes"
             echo "trigger_type=push" >> $GITHUB_OUTPUT
