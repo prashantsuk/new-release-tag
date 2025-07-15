@@ -1,0 +1,145 @@
+# .github/workflows/tag-protection.yml
+# This workflow prevents manual tag creation and only allows automated releases
+
+name: Tag Protection
+
+on:
+  create:
+    tags:
+      - 'v*'              # Version tags like v1.0.0, v2.1.3
+      - 'release-*'       # Release tags like release-1.0.0
+      - '*.*.*'           # Semantic version tags like 1.0.0
+
+jobs:
+  validate-tag-creation:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate tag creation source
+        id: validate
+        run: |
+          echo "🔍 Checking tag creation context..."
+          echo "Event: ${{ github.event_name }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Tag: ${{ github.ref_name }}"
+          echo "Workflow: ${{ github.workflow }}"
+          
+          # Method 1: Check if running within automated release workflow
+          if [[ "${{ github.workflow }}" == "Automated Release" ]]; then
+            echo "✅ Tag created by automated release workflow"
+            echo "allowed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Method 2: Check for automation markers in commit message
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          if [[ "$COMMIT_MSG" =~ \[automated-release\] ]]; then
+            echo "✅ Tag created by automated process (commit marker found)"
+            echo "allowed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Method 3: Check if actor is a bot or automation account
+          if [[ "${{ github.actor }}" == "github-actions[bot]" ]] || 
+             [[ "${{ github.actor }}" == "dependabot[bot]" ]] ||
+             [[ "${{ github.actor }}" == *"[bot]" ]] ||
+             [[ "${{ github.actor }}" == "automation" ]] ||
+             [[ "${{ github.actor }}" == "release-bot" ]]; then
+            echo "✅ Tag created by bot/automation account: ${{ github.actor }}"
+            echo "allowed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Method 4: Check for automation environment variable
+          if [[ "${{ vars.AUTOMATED_RELEASE }}" == "true" ]]; then
+            echo "✅ Tag created with automation flag"
+            echo "allowed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Method 5: Check if triggered by another workflow (workflow_run)
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            echo "✅ Tag created by workflow_run event"
+            echo "allowed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # If none of the above conditions are met, it's manual creation
+          echo "❌ Manual tag creation detected!"
+          echo "allowed=false" >> $GITHUB_OUTPUT
+
+      - name: Delete manual tag and create notification
+        if: steps.validate.outputs.allowed == 'false'
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          CREATOR="${{ github.actor }}"
+          
+          echo "::error::🚫 Manual tag creation is not allowed!"
+          echo "::error::Tag '$TAG_NAME' was created manually by $CREATOR"
+          echo "::error::Please use the 'Automated Release' workflow instead."
+          
+          # Configure git
+          git config --global user.name "GitHub Actions Tag Protection"
+          git config --global user.email "actions@github.com"
+          
+          # Delete the manually created tag
+          echo "🗑️ Deleting manual tag: $TAG_NAME"
+          git push origin :refs/tags/$TAG_NAME
+          
+          # Create an issue to notify about the blocked attempt
+          cat > issue_body.md << EOF
+          ## 🚫 Manual Tag Creation Blocked
+          
+          **Tag:** \`$TAG_NAME\`  
+          **Created by:** @$CREATOR  
+          **Time:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
+          ### ❌ What happened?
+          The tag \`$TAG_NAME\` was automatically deleted because it was created manually.
+          
+          ### ✅ How to create releases properly?
+          1. Go to **Actions** → **Automated Release**
+          2. Click **"Run workflow"**
+          3. Enter the version number (e.g., \`1.0.0\`)
+          4. Click **"Run workflow"**
+          
+          ### 🔧 Why this restriction?
+          - Ensures consistent release process
+          - Automatically generates changelogs
+          - Maintains proper version history
+          - Prevents accidental or malformed releases
+          
+          ### 📋 Need help?
+          Check the [Release Process Documentation](../../wiki/Release-Process) or contact the DevOps team.
+          EOF
+          
+          # Create the notification issue
+          gh issue create \
+            --title "🚫 Manual tag creation blocked: $TAG_NAME" \
+            --body-file issue_body.md \
+            --label "automation,release,blocked" \
+            --assignee "$CREATOR"
+          
+          echo "📝 Created notification issue for $CREATOR"
+          
+          # Fail the workflow to show it in the Actions tab
+          exit 1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log successful automation
+        if: steps.validate.outputs.allowed == 'true'
+        run: |
+          echo "✅ Tag creation validated successfully"
+          echo "✅ Tag '${{ github.ref_name }}' created by automation"
+          echo "✅ Release process completed properly"
