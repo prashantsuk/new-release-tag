@@ -24,315 +24,102 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Validate tag creation source
+      - name: ULTRA STRICT Tag Validation
         id: validate
         run: |
-          echo "🔍 DETAILED DEBUGGING OF TAG VALIDATION"
-          echo "========================================"
-          echo "Event: ${{ github.event_name }}"
-          echo "Actor: ${{ github.actor }}"
+          echo "🔍 ULTRA STRICT TAG VALIDATION - Version 2.0"
+          echo "============================================="
           echo "Tag: ${{ github.ref_name }}"
-          echo "Workflow: ${{ github.workflow }}"
-          echo "Repository: ${{ github.repository }}"
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Event Name: ${{ github.event_name }}"
-          echo "Ref: ${{ github.ref }}"
-          echo "Ref Type: ${{ github.ref_type }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Event: ${{ github.event_name }}"
+          echo "Time: $(date -u)"
           
-          # Get the commit that created this tag
-          TAG_COMMIT=$(git rev-list -n 1 ${{ github.ref_name }} 2>/dev/null || echo "unknown")
-          echo "Tag points to commit: $TAG_COMMIT"
+          # Force display this validation is running
+          echo "::notice::🔍 Tag Protection validation is running for ${{ github.ref_name }}"
           
-          # Get the commit message for the tagged commit
-          if [[ "$TAG_COMMIT" != "unknown" ]]; then
-            COMMIT_MSG=$(git log -1 --pretty=%B $TAG_COMMIT 2>/dev/null || echo "")
-            echo "Commit message: '$COMMIT_MSG'"
-          else
-            COMMIT_MSG=""
-            echo "Could not retrieve commit message"
-          fi
-          
-          # Get tag annotation message if it exists
+          # Get tag annotation - this is the ONLY thing that matters
           TAG_MESSAGE=$(git tag -l --format='%(contents)' ${{ github.ref_name }} 2>/dev/null || echo "")
-          echo "Tag annotation: '$TAG_MESSAGE'"
           
-          # STRICT VALIDATION: Default to BLOCK unless we find EXPLICIT automation markers
           echo ""
-          echo "🔒 STARTING STRICT VALIDATION"
-          echo "🔒 Default: BLOCK (unless explicit automation proof found)"
-          echo ""
+          echo "📝 Tag annotation content:"
+          if [[ -n "$TAG_MESSAGE" ]]; then
+            echo "\"$TAG_MESSAGE\""
+          else
+            echo "(no annotation - this is a manual tag)"
+          fi
           
-          # Method 1: Check if tag annotation contains our EXACT automation marker
-          echo "METHOD 1: Checking tag annotation for [automated-release]"
+          echo ""
+          echo "🔍 Checking for [automated-release] marker..."
+          
+          # THE ONLY VALIDATION: Check for exact [automated-release] marker
           if [[ -n "$TAG_MESSAGE" && "$TAG_MESSAGE" =~ \[automated-release\] ]]; then
-            echo "✅ FOUND: Tag annotation contains [automated-release] marker"
-            echo "✅ ALLOWING tag due to annotation marker"
+            echo "✅ AUTOMATION DETECTED: Tag contains [automated-release] marker"
+            echo "✅ This tag is ALLOWED"
             echo "allowed=true" >> $GITHUB_OUTPUT
-            exit 0
           else
-            echo "❌ NOT FOUND: Tag annotation does not contain [automated-release] marker"
-            echo "   Tag annotation content: '$TAG_MESSAGE'"
+            echo "❌ MANUAL TAG DETECTED: No [automated-release] marker found"
+            echo "❌ This tag will be DELETED immediately"
+            echo "allowed=false" >> $GITHUB_OUTPUT
           fi
           
-          # Method 2: Check if commit message contains our EXACT automation marker
           echo ""
-          echo "METHOD 2: Checking commit message for [automated-release]"
-          if [[ -n "$COMMIT_MSG" && "$COMMIT_MSG" =~ \[automated-release\] ]]; then
-            echo "✅ FOUND: Commit message contains [automated-release] marker"
-            echo "✅ ALLOWING tag due to commit message marker"
-            echo "allowed=true" >> $GITHUB_OUTPUT
-            exit 0
+          echo "🎯 FINAL DECISION:"
+          if [[ -n "$TAG_MESSAGE" && "$TAG_MESSAGE" =~ \[automated-release\] ]]; then
+            echo "RESULT: ALLOW (automation marker found)"
           else
-            echo "❌ NOT FOUND: Commit message does not contain [automated-release] marker"
-            echo "   Commit message content: '$COMMIT_MSG'"
+            echo "RESULT: BLOCK AND DELETE (manual tag)"
           fi
-          
-          # Method 3: Check if recent commits (last 5 minutes) contain automation marker AND tag points to one of them
-          echo ""
-          echo "METHOD 3: Checking for recent automation activity (last 5 minutes)"
-          RECENT_AUTOMATION=$(git log --since="5 minutes ago" --oneline --grep="\[automated-release\]" 2>/dev/null || echo "")
-          if [[ -n "$RECENT_AUTOMATION" ]]; then
-            echo "✅ FOUND: Recent automation commits in last 5 minutes:"
-            echo "$RECENT_AUTOMATION"
-            
-            # Check if the tag points to one of these automation commits
-            if echo "$RECENT_AUTOMATION" | grep -q "$TAG_COMMIT"; then
-              echo "✅ MATCH: Tag points to recent automation commit - ALLOWING"
-              echo "allowed=true" >> $GITHUB_OUTPUT
-              exit 0
-            else
-              echo "❌ NO MATCH: Tag does not point to recent automation commit"
-              echo "   Tag commit: $TAG_COMMIT"
-              echo "   Recent automation commits: $RECENT_AUTOMATION"
-            fi
-          else
-            echo "❌ NOT FOUND: No recent automation activity in last 5 minutes"
-          fi
-          
-          # Method 4: Check if this is triggered by workflow_run (from another workflow)
-          echo ""
-          echo "METHOD 4: Checking if triggered by workflow_run"
-          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            echo "✅ FOUND: Triggered by workflow_run event - ALLOWING"
-            echo "allowed=true" >> $GITHUB_OUTPUT
-            exit 0
-          else
-            echo "❌ NOT FOUND: Not triggered by workflow_run (event: ${{ github.event_name }})"
-          fi
-          
-          # Method 5: Check for automation in last 10 commits AND verify tag points to one of them
-          echo ""
-          echo "METHOD 5: Checking last 10 commits for automation markers"
-          RECENT_AUTOMATION_EXTENDED=$(git log --oneline -10 --grep="\[automated-release\]" 2>/dev/null || echo "")
-          if [[ -n "$RECENT_AUTOMATION_EXTENDED" ]]; then
-            echo "✅ FOUND: Automation commits in last 10:"
-            echo "$RECENT_AUTOMATION_EXTENDED"
-            
-            # Check if the tag points to one of these automation commits
-            if echo "$RECENT_AUTOMATION_EXTENDED" | grep -q "$TAG_COMMIT"; then
-              echo "✅ MATCH: Tag points to automation commit - ALLOWING"
-              echo "   Tag commit: $TAG_COMMIT"
-              echo "   Matching automation commit found"
-              echo "allowed=true" >> $GITHUB_OUTPUT
-              exit 0
-            else
-              echo "❌ NO MATCH: Tag does not point to any automation commit"
-              echo "   Tag commit: $TAG_COMMIT"
-              echo "   None of the automation commits match"
-            fi
-          else
-            echo "❌ NOT FOUND: No automation commits in last 10"
-          fi
-          
-          # If we reach here, NO automation markers were found - this is MANUAL
-          echo ""
-          echo "🚨 FINAL DECISION: BLOCKING!"
-          echo "=========================================="
-          echo "❌ NO automation evidence found anywhere!"
-          echo "❌ Tag '${{ github.ref_name }}' is DEFINITELY MANUAL"
-          echo "❌ Actor: ${{ github.actor }}"
-          echo "❌ Tag annotation: '$TAG_MESSAGE'"
-          echo "❌ Commit message: '$COMMIT_MSG'"
-          echo "❌ No [automated-release] markers in recent commits"
-          echo "❌ Not triggered by workflow_run"
-          echo ""
-          echo "🗑️ This tag WILL BE DELETED!"
-          echo "allowed=false" >> $GITHUB_OUTPUT
 
-      - name: Delete manual tag and create notification
+      - name: Allow Automated Tag
+        if: steps.validate.outputs.allowed == 'true'
+        run: |
+          echo "✅ AUTOMATED TAG ALLOWED"
+          echo "✅ Tag '${{ github.ref_name }}' contains automation markers"
+          echo "✅ Tag creation permitted - no action needed"
+
+      - name: Block and Delete Manual Tag
         if: steps.validate.outputs.allowed == 'false'
         run: |
           TAG_NAME="${{ github.ref_name }}"
-          CREATOR="${{ github.actor }}"
           
-          echo "::error::🚫 Manual tag creation is not allowed!"
-          echo "::error::Tag '$TAG_NAME' was created manually by $CREATOR"
-          echo "::error::Please use the 'Automated Release' workflow instead."
-          
-          # Show current repository state for debugging
-          echo "🔍 Repository state:"
-          echo "Branch: $(git branch --show-current 2>/dev/null || echo 'detached')"
-          echo "Last 3 commits:"
-          git log --oneline -3 || echo "No commits found"
-          echo "All tags:"
-          git tag -l || echo "No tags found"
+          echo "🚫 MANUAL TAG BLOCKED!"
+          echo "::error::Manual tag '$TAG_NAME' is NOT ALLOWED"
+          echo "::error::Deleting tag immediately"
           
           # Configure git
-          git config --global user.name "GitHub Actions Tag Protection"
-          git config --global user.email "actions@github.com"
+          git config --global user.name "Tag Protection Bot"
+          git config --global user.email "tag-protection@github.com"
           
-          # Delete the manually created tag
-          echo "🗑️ Attempting to delete manual tag: $TAG_NAME"
-          echo "🔍 Current git state before deletion:"
-          git tag -l | grep "$TAG_NAME" || echo "Tag not found locally"
+          # Delete the tag
+          echo "🗑️ Deleting manual tag: $TAG_NAME"
           
-          # Method 1: Delete using git push
-          echo "Method 1: Deleting via git push..."
           if git push origin :refs/tags/$TAG_NAME 2>&1; then
-            echo "✅ Successfully deleted tag $TAG_NAME from remote using git push"
-            DELETION_SUCCESS=true
+            echo "✅ Manual tag deleted successfully"
           else
-            echo "❌ Failed to delete tag using git push"
-            DELETION_SUCCESS=false
+            echo "❌ Failed to delete with git push, trying API..."
+            gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG_NAME" || echo "API deletion also failed"
           fi
           
-          # Method 2: Delete using GitHub API if git push failed
-          if [[ "$DELETION_SUCCESS" != "true" ]]; then
-            echo "Method 2: Deleting via GitHub API..."
-            if gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG_NAME" 2>&1; then
-              echo "✅ Successfully deleted tag $TAG_NAME using GitHub API"
-              DELETION_SUCCESS=true
-            else
-              echo "❌ Failed to delete tag using GitHub API"
-            fi
-          fi
-          
-          # Method 3: Force delete with alternative API endpoint
-          if [[ "$DELETION_SUCCESS" != "true" ]]; then
-            echo "Method 3: Force delete via alternative API..."
-            TAG_SHA=$(gh api "repos/${{ github.repository }}/git/refs/tags/$TAG_NAME" --jq '.object.sha' 2>/dev/null || echo "")
-            if [[ -n "$TAG_SHA" ]]; then
-              if gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG_NAME" -f sha="$TAG_SHA" 2>&1; then
-                echo "✅ Successfully force deleted tag $TAG_NAME"
-                DELETION_SUCCESS=true
-              fi
-            fi
-          fi
-          
-          # Check if tag still exists
-          echo "🔍 Verifying tag deletion..."
-          sleep 2  # Wait a moment for GitHub to process
-          
-          # Check if tag exists using API (suppress error output for cleaner logs)
+          # Verify deletion
+          sleep 2
           if gh api "repos/${{ github.repository }}/git/refs/tags/$TAG_NAME" >/dev/null 2>&1; then
-            echo "⚠️ Tag still exists after deletion attempts"
-            DELETION_STATUS="❌ Failed to delete (tag still exists)"
+            echo "⚠️ Tag still exists - deletion may have failed"
           else
-            echo "✅ Tag successfully deleted and no longer exists"
-            DELETION_STATUS="✅ Successfully deleted"
+            echo "✅ Confirmed: Tag successfully deleted"
           fi
           
-          # Create an issue to notify about the blocked attempt
-          cat > issue_body.md << EOF
-          ## 🚫 Manual Tag Creation Blocked
+          # Create summary
+          echo "## 🚫 Manual Tag Blocked" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** \`$TAG_NAME\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Actor:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** Deleted" >> $GITHUB_STEP_SUMMARY
+          echo "**Reason:** No [automated-release] annotation found" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Use the **Automated Release** workflow to create releases properly." >> $GITHUB_STEP_SUMMARY
           
-          **Tag:** \`$TAG_NAME\`  
-          **Created by:** @$CREATOR  
-          **Time:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")  
-          **Event:** ${{ github.event_name }}  
-          **Workflow Run:** [${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})  
-          **Deletion Status:** $DELETION_STATUS
-          
-          ### ❌ What happened?
-          The tag \`$TAG_NAME\` was created manually and our automation detected it.
-          **Action taken:** Attempted automatic deletion.
-          
-          ### 🔍 Detection Details
-          - **Actor:** ${{ github.actor }}
-          - **Event:** ${{ github.event_name }}
-          - **Tag Commit:** $TAG_COMMIT
-          - **No automation markers found in tag or recent commits**
-          
-          ### ✅ How to create releases properly?
-          
-          **Option 1: Use the Automated Release Workflow**
-          1. Go to **[Actions → Automated Release](https://github.com/${{ github.repository }}/actions/workflows/automated-release.yml)**
-          2. Click **"Run workflow"**
-          3. Enter the version number (e.g., \`1.0.3\`)
-          4. Click **"Run workflow"**
-          
-          **Option 2: Update VERSION file and merge PR**
-          1. Create a feature branch
-          2. Update the \`VERSION\` file with your desired version (e.g., \`1.0.3\`)
-          3. Create and merge a PR to main/master
-          4. Release will be created automatically
-          
-          ### 🔧 Why this restriction exists?
-          - ✅ Ensures consistent release process
-          - ✅ Automatically generates changelogs
-          - ✅ Maintains proper version history
-          - ✅ Prevents accidental or malformed releases
-          - ✅ Tracks release triggers and contexts
-          
-          ### 🚨 If this was a legitimate automated release
-          If you believe this tag was created by automation but was incorrectly flagged:
-          1. Check that your automation includes the \`[automated-release]\` marker
-          2. Verify the tag annotation contains automation markers
-          3. Contact the DevOps team for investigation
-          
-          ### 📋 Need help?
-          - Check the repository's release documentation
-          - Contact the DevOps team
-          - Review existing releases for examples
-          
-          ---
-          *This issue was created automatically by the Tag Protection workflow.*
-          *Workflow Run: ${{ github.run_id }}*
-          EOF
-          
-          # Create the notification issue (with better error handling)
-          echo "📝 Creating notification issue..."
-          
-          # First, try to create issue with assignee
-          if gh issue create \
-            --title "🚫 Manual tag creation blocked: $TAG_NAME" \
-            --body-file issue_body.md \
-            --label "automation,release,blocked" \
-            --assignee "$CREATOR" 2>/dev/null; then
-            echo "✅ Created notification issue and assigned to $CREATOR"
-          elif gh issue create \
-            --title "🚫 Manual tag creation blocked: $TAG_NAME" \
-            --body-file issue_body.md \
-            --label "automation,release,blocked" 2>/dev/null; then
-            echo "✅ Created notification issue (without assignee)"
-          else
-            echo "⚠️ Failed to create issue - this could be due to:"
-            echo "   - Repository doesn't have Issues enabled"
-            echo "   - Insufficient permissions"
-            echo "   - GitHub API rate limits"
-            echo "📝 Issue content would have been:"
-            echo "---"
-            cat issue_body.md
-            echo "---"
-          fi
-          
-          # The workflow completed successfully - manual tag was blocked and deleted
-          echo ""
-          echo "🎯 SUMMARY:"
-          echo "✅ Manual tag creation was detected and blocked"
-          echo "✅ Tag '$TAG_NAME' was successfully deleted"
-          echo "🟢 Workflow completed successfully - blocking worked as intended!"
-          echo ""
-          echo "::notice::✅ SUCCESS: Manual tag '$TAG_NAME' was blocked and deleted"
-          # Don't exit with error - let it succeed to show green checkmark
-          # exit 1  # Commented out to show success instead of failure
+          # Fail the workflow to show blocking occurred
+          echo "::error::Manual tag blocked and deleted"
+          exit 1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Log successful automation
-        if: steps.validate.outputs.allowed == 'true'
-        run: |
-          echo "✅ Tag creation validated successfully"
-          echo "✅ Tag '${{ github.ref_name }}' created by automation"
-          echo "✅ Release process completed properly"
