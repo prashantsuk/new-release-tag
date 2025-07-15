@@ -1,0 +1,112 @@
+# .github/workflows/automated-release.yml
+name: Automated Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 1.0.0)'
+        required: true
+        type: string
+      automated:
+        description: 'Internal automation flag'
+        required: false
+        default: 'true'
+        type: string
+  
+  # Trigger on main branch push with version bump
+  push:
+    branches:
+      - main
+    paths:
+      - 'package.json'  # Adjust based on your version file
+      - 'version.txt'
+      - 'pom.xml'
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            # Extract version from package.json, version.txt, or other version files
+            if [[ -f "package.json" ]]; then
+              VERSION=$(jq -r '.version' package.json)
+            elif [[ -f "version.txt" ]]; then
+              VERSION=$(cat version.txt)
+            else
+              # Generate version based on date or commit
+              VERSION="v$(date +%Y.%m.%d)-$(git rev-parse --short HEAD)"
+            fi
+          fi
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Creating release for version: $VERSION"
+
+      - name: Check if tag already exists
+        id: check-tag
+        run: |
+          if git tag -l | grep -q "^v${{ steps.version.outputs.version }}$"; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag v${{ steps.version.outputs.version }} already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate changelog
+        id: changelog
+        if: steps.check-tag.outputs.exists == 'false'
+        run: |
+          # Get commits since last tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          
+          if [[ -n "$LAST_TAG" ]]; then
+            CHANGELOG=$(git log --oneline --pretty=format:"- %s" $LAST_TAG..HEAD)
+          else
+            CHANGELOG=$(git log --oneline --pretty=format:"- %s" HEAD~10..HEAD)
+          fi
+          
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create and push tag
+        if: steps.check-tag.outputs.exists == 'false'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        if: steps.check-tag.outputs.exists == 'false'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: "v${{ steps.version.outputs.version }}"
+          release_name: "Release v${{ steps.version.outputs.version }}"
+          body: |
+            ## What's Changed
+            ${{ steps.changelog.outputs.changelog }}
+            
+            **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.previous-tag.outputs.tag }}...v${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: false
