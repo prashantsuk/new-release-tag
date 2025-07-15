@@ -1,5 +1,3 @@
-# .github/workflows/tag-protection.yml
-# This workflow prevents manual tag creation and only allows automated releases
 
 name: Tag Protection
 
@@ -9,6 +7,7 @@ on:
       - 'v*'              # Version tags like v1.0.0, v2.1.3
       - 'release-*'       # Release tags like release-1.0.0
       - '*.*.*'           # Semantic version tags like 1.0.0
+      - 'QA*'
 
 jobs:
   validate-tag-creation:
