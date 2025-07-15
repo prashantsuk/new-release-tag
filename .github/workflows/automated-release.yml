@@ -333,7 +333,26 @@ jobs:
           else
             echo "Initial release" >> changelog.md
             echo "" >> changelog.md
-            git log --oneline --pretty=format:"- %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" HEAD~10..HEAD >> changelog.md
+            
+            # Check how many commits we have
+            COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+            echo "📊 Total commits in repository: $COMMIT_COUNT"
+            
+            if [[ "$COMMIT_COUNT" -gt 0 ]]; then
+              # Use all commits for initial release, but limit to 20 max
+              MAX_COMMITS=$(( COMMIT_COUNT > 20 ? 20 : COMMIT_COUNT ))
+              echo "📝 Including last $MAX_COMMITS commits in changelog"
+              
+              # Get commits safely
+              git log --oneline --pretty=format:"- %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" -n "$MAX_COMMITS" >> changelog.md
+              
+              # Add contributors for initial release
+              echo "" >> changelog.md
+              echo "### 👥 Contributors" >> changelog.md
+              git log --format='- @%an' -n "$MAX_COMMITS" | sort -u >> changelog.md
+            else
+              echo "- Initial commit" >> changelog.md
+            fi
           fi
           
           # Add comparison link
