@@ -293,15 +293,16 @@ jobs:
             echo "---"
           fi
           
-          # The workflow should exit with error to clearly show the blocking action
+          # The workflow completed successfully - manual tag was blocked and deleted
           echo ""
           echo "🎯 SUMMARY:"
           echo "✅ Manual tag creation was detected and blocked"
           echo "✅ Tag '$TAG_NAME' was successfully deleted"
-          echo "🔴 This workflow failure is EXPECTED - it indicates successful blocking!"
+          echo "🟢 Workflow completed successfully - blocking worked as intended!"
           echo ""
-          echo "::error::✅ SUCCESS: Manual tag '$TAG_NAME' was blocked and deleted"
-          exit 1
+          echo "::notice::✅ SUCCESS: Manual tag '$TAG_NAME' was blocked and deleted"
+          # Don't exit with error - let it succeed to show green checkmark
+          # exit 1  # Commented out to show success instead of failure
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
